@@ -26,7 +26,7 @@ The repository includes two test cases:
 |-------------|----------------------------------------|
 | `iters`     | MCMC iterations per AIS round          |
 | `burns`     | Burn-in iterations before sampling     |
-| `n_rounds`  | Number of samples per β-step           |
+| `n_rounds`  | Number of samples per $\beta$-step           |
 | `n_chains`  | Number of independent AIS chains       |
 | `betas`     | Temperature schedule from 0 to 1       |
 

@@ -23,121 +23,131 @@ class TensorNetwork:
                 else:
                     self.index_dims[idx] = dim
                 self.index_to_tensors.setdefault(idx, []).append((name, tensor, indices))
+        
+        self.col_of = {idx: c for c, idx in enumerate(self.index_dims)}
 
-def evaluate_config(network, config):
-    result = 1.0
+def evaluate_config(network, configs):
+    result = np.ones(len(configs))
     for _, (tensor, inds) in network.tensors.items():
-        key = tuple(config[idx] for idx in inds)
-        result *= tensor[key]
+        keys = tuple(configs[i, network.col_of[i]] for i in inds)
+        result *= tensor[keys]
     return result
 
-def update_edge(network, config, idx, beta=1.0):
-    tensors = network.index_to_tensors[idx]
+def update_edge(network, configs, idx, beta=1.0):
     dim = network.index_dims[idx]
-    probs = np.ones(dim)
+    col = network.col_of[idx]
+    n_chains = configs.shape[0]
 
-    for _, arr, inds in tensors:
-        slc = [config[i] if i != idx else slice(None) for i in inds]
-        probs *= arr[tuple(slc)] ** beta
+    probs = np.ones((n_chains, dim))
+    for _, tensor, inds in network.index_to_tensors[idx]:
+        slc = []
+        for i in inds:
+            if i == idx:
+                slc.append(slice(None))
+            else:
+                slc.append(configs[:, network.col_of[i]])
+        arr_vals = tensor[tuple(slc)]
+        if arr_vals.shape != (n_chains, dim):
+            arr_vals = arr_vals.reshape(n_chains, dim)
+        probs *= arr_vals ** beta
 
-    probs_sum = probs.sum()
-    if probs_sum > 0:
-        probs /= probs_sum
-    else:
-        probs = np.ones(dim) / dim
+    probs /= probs.sum(axis=1, keepdims=True)
+    new_vals = [np.random.choice(dim, p=probs[i]) for i in range(n_chains)]
+    configs[:, col] = new_vals
 
-    config[idx] = np.random.choice(dim, p=probs)
 
-def estimate_contraction(net, betas, iters=10000, burns=1000, n_rounds=5, verbose=False):
-    logZ_sum = 0.0
-    logZ_traj = []
-    weights_by_beta = []
+def estimate_contraction(net, betas, iters=10_000, burns=1_000, n_rounds=5, verbose=True):
+    logZ_trajs = [[] for _ in range(n_rounds)]
+    weights_by_beta = [[] for _ in range(len(betas)-1)]
+    logZ_sums = np.zeros(n_rounds)
 
     index_list = list(net.index_dims)
     total_steps = len(betas) - 1
+    dim_size = len(index_list)
+
+    configs = np.random.randint(0, 3, size=(n_rounds, dim_size))
 
     for i in range(1, len(betas)):
         beta_prev, beta_curr = betas[i-1], betas[i]
         delta_beta = beta_curr - beta_prev
-        all_weights = []
 
         if verbose and (i % 10 == 0 or i == total_steps):
             timestamp = datetime.now().strftime("%H:%M:%S")
-            print(f'[{timestamp}] beta step {i}/{total_steps} ({beta_curr:.4f})')
+            print(f'[{timestamp}] beta step {i}/{total_steps} ({beta_curr:.4f}) ')
 
-        for _ in range(n_rounds):
-            cfg = {idx: np.random.randint(d) for idx, d in net.index_dims.items()}
+        all_weights = [[] for _ in range(n_rounds)]
 
-            for t in range(iters):
-                idx = np.random.choice(index_list)
-                update_edge(net, cfg, idx, beta=beta_prev)
-                if t >= burns:
-                    psi = evaluate_config(net, cfg)
-                    weight = psi ** delta_beta
-                    all_weights.append(weight)
+        for t in range(iters):
+            idx = np.random.choice(index_list)
+            update_edge(net, configs, idx, beta=beta_prev)
+            if t >= burns:
+                psi_vals = evaluate_config(net, configs)
+                valid = psi_vals > 1e-30
+                weights = np.where(valid, psi_vals ** delta_beta, 0.0)
+                for j in range(n_rounds):
+                    all_weights[j].append(weights[j])
 
-        if len(all_weights) == 0:
-            log_rho = np.NINF
-            all_weights = [0.0]
-            if verbose:
-                print(f'[beta={beta_curr:.3f}]  NO VALID WEIGHTS SAMPLED')
-        else:
-            log_rho = np.log(np.mean(all_weights))
+        mean_weights = [np.mean(w) if len(w) > 0 else 0.0 for w in all_weights]
+        log_rhos     = [np.log(mw) if mw > 0 else -np.inf for mw in mean_weights]
 
-        logZ_sum += log_rho
-        logZ_traj.append(logZ_sum)
-        weights_by_beta.append(np.asarray(all_weights))
+        for j in range(n_rounds):
+            logZ_sums[j] += log_rhos[j]
+            logZ_trajs[j].append(logZ_sums[j])
+            weights_by_beta[i-1].append(np.asarray(all_weights[j]))
 
         if verbose:
-            print(f"[beta={beta_curr:.3f}]  log rho={log_rho:+.3e} | "
-                  f"cum log Z={logZ_sum:+.3e} | "
-                  f"<w>={np.mean(all_weights):.4e}  var(w)={np.var(all_weights):.4e}")
+            print(f"[beta={beta_curr:.3f}]  mean log rho = {np.mean(log_rhos):+.3e}  | <w> mean = {np.mean(mean_weights):.4e}")
 
     log_size = np.sum(np.log(list(net.index_dims.values())))
-    Z_est = np.exp(logZ_sum + log_size)
-    return Z_est, logZ_traj, weights_by_beta
+    Z_ests = np.exp(logZ_sums + log_size)
+    return Z_ests, logZ_trajs, weights_by_beta
 
-def run_multiple_chains(net, betas, n_chains=5, iters=10000, burns=1000, n_rounds=5, Z_true=None):
-    estimates = []
-    logZ_trajectories = []
-    weight_variances = []
 
-    for c in range(n_chains):
-        np.random.seed(c)
-        print(f"\n==== chain {c+1}/{n_chains} ====")
+# run several independent AIS chains and visualize convergence
+def run_multiple_chains(net        : TensorNetwork,
+                        betas      : np.ndarray,
+                        n_chains   : int  = 5,
+                        iters      : int  = 10_000,
+                        burns      : int  = 1_000,
+                        n_rounds   : int  = 5,
+                        Z_true     : float|None = None,
+                        n_workers  : int  = None):
 
-        Z_hat, log_traj, w_by_beta = estimate_contraction(
-            net, betas, iters, burns, n_rounds, verbose=False
-        )
+    print(f"Running {n_chains} AIS chains vectorized")
+    Z_ests, logZ_trajectories, weights_by_beta = estimate_contraction(
+        net, betas, iters, burns, n_rounds=n_chains, verbose=True
+    )
 
-        estimates.append(Z_hat)
-        logZ_trajectories.append(log_traj)
-
-        rel_sig = [ (np.std(w)/np.mean(w)) if np.mean(w) > 0 else 0.0 for w in w_by_beta ]
-        weight_variances.append(rel_sig)
-
+    # ---------- 1) cumulative log-Z trajectories ----------------------- #
     plt.figure(figsize=(12, 3.8))
     for k, traj in enumerate(logZ_trajectories, 1):
         plt.plot(betas[1:], traj, label=f"chain {k}", alpha=0.8)
-    plt.xlabel(r"$\\beta$")
-    plt.ylabel(r"$\\log Z$ (cum.)")
+    plt.xlabel(r"$\beta$")
+    plt.ylabel(r"$\log Z$ (cumulative.)")
     plt.title("log-Z convergence across chains")
     plt.legend(); plt.grid(True); plt.tight_layout(); plt.show()
 
+    # ---------- 2) relative sigma(w) per beta -------------------------------- #
     plt.figure(figsize=(12, 3.8))
-    for k, rel_sig in enumerate(weight_variances, 1):
-        plt.plot(betas[1:], rel_sig, label=f"chain {k}", alpha=0.8)
-    plt.xlabel(r"$\\beta$")
-    plt.ylabel(r"rel $\\sigma(w)$")
+    for k in range(n_chains):
+        rel_sig = []
+        for weights in weights_by_beta:
+            w = weights[k]
+            rel = np.std(w) / np.mean(w) if np.mean(w) > 0 else 0
+            rel_sig.append(rel)
+        plt.plot(betas[1:], rel_sig, label=f"chain {k+1}", alpha=0.8)
+    plt.xlabel(r"$\beta$")
+    plt.ylabel(r"rel $\sigma(w)$")
     plt.title("weight dispersion vs beta")
     plt.legend(); plt.grid(True); plt.tight_layout(); plt.show()
 
-    est_mean, est_std = np.mean(estimates), np.std(estimates)
+    # ---------- 3) final-estimate statistics -------------------------- #
+    est_mean, est_std = np.mean(Z_ests), np.std(Z_ests)
     rel_var = est_std / est_mean if est_mean > 0 else float("nan")
-    print(rf"\nFinal relative variance of $\\hat Z$: {rel_var:.4e}")
+    print(rf"\nFinal relative variance of $\hat Z$: {rel_var:.4e}")
 
     if Z_true is not None:
-        rel_errs = [abs(z - Z_true)/abs(Z_true) for z in estimates]
+        rel_errs = [abs(z - Z_true)/abs(Z_true) for z in Z_ests]
         plt.figure(figsize=(5.5, 4))
         plt.bar(range(1, n_chains+1), rel_errs)
         plt.xlabel("chain"); plt.ylabel("rel error")
