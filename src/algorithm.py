@@ -107,8 +107,8 @@ def estimate_contraction(net, betas, iters=10_000, burns=1_000, n_rounds=5, verb
 def run_multiple_chains(net        : TensorNetwork,
                         betas      : np.ndarray,
                         n_chains   : int  = 5,
-                        iters      : int  = 10_000,
-                        burns      : int  = 1_000,
+                        iters      : int  = 10000,
+                        burns      : int  = 1000,
                         n_rounds   : int  = 5,
                         Z_true     : float|None = None,
                         n_workers  : int  = None):
