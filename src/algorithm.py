@@ -1,6 +1,6 @@
 """
 Approximate Tensor Network Contraction with Annealed Importance Sampling (AIS)
-Authors: Sreevardhan Atyam, Anitej Chanda, Aniket Deshpande, Edgar Solomonik.
+Authors: Sreevardhan Atyam, Anitej Chanda, Aniket Deshpande, Qizhao Huang, Edgar Solomonik.
 University of Illinois Urbana-Champaign
 """
 
@@ -199,9 +199,20 @@ def contract_tensor_network(graph, tensors):
     """
     einsum_terms = []
     einsum_tensors = []
+    index_map = {}
+    chars = list('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')
+
     for _, (tensor, indices) in tensors.items():
-        einsum_terms.append(''.join(indices))
+        subs = []
+        for idx in indices:
+            if idx not in index_map:
+                if not chars:
+                    raise ValueError("ran out of characters for einsum indices")
+                index_map[idx] = chars.pop(0)
+            subs.append(index_map[idx])
+        einsum_terms.append(''.join(subs))
         einsum_tensors.append(tensor)
-    einsum_expr = ','.join(einsum_terms)
-    return np.einsum(einsum_expr, *einsum_tensors)
+
+    expr = ','.join(einsum_terms) + '->'
+    return np.einsum(expr, *einsum_tensors, optimize='greedy')
 
