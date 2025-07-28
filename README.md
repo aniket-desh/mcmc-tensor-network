@@ -15,20 +15,36 @@ The method applies a sequence of intermediate distributions parameterized by inv
 
 ## Example Usage
 
-The repository includes two test cases:
+The repository includes several test cases that demonstrate different tensor network structures:
 
-- `test_2x2_ring.py`: Computes Tr(ABCD) for a 2×2 ring of random positive matrices.
-- `test_3x3_grid.py`: Estimates the contraction of a 3×3 grid tensor network with known exact value.
+- `test_2x2_ring.py`: Computes Tr(ABCD) for a 2×2 ring of random positive matrices
+- `test_3x3_grid.py`: Estimates the contraction of a 3×3 grid tensor network with known exact value
+- `test_3x3_dd.py`: Estimates the contraction of a 3×3 grid with diagonally dominant tensors
+
+Each test can be run with configurable parameters:
+
+```python
+# Example: 2x2 ring test
+mean_Z, std_Z, rel_error = test_trace_ABCD(
+    dim=3,                          # Tensor dimension
+    betas=np.linspace(0, 1, 200),   # Beta schedule
+    n_chains=5,                     # Number of parallel chains
+    iters=20000,                    # MCMC iterations per beta step
+    burns=1900,                     # Burn-in iterations
+    show_diagnostics=True           # Show plots and detailed output
+)
+```
 
 ## Parameters
 
-| Parameter   | Description                            |
-|-------------|----------------------------------------|
-| `iters`     | MCMC iterations per AIS round          |
-| `burns`     | Burn-in iterations before sampling     |
-| `n_rounds`  | Number of samples per $\beta$-step           |
-| `n_chains`  | Number of independent AIS chains       |
-| `betas`     | Temperature schedule from 0 to 1       |
+| Parameter           | Description                                    |
+|---------------------|------------------------------------------------|
+| `iters`             | MCMC iterations per beta step                 |
+| `burns`             | Burn-in iterations before sampling            |
+| `n_chains`          | Number of independent AIS chains              |
+| `n_betas`           | Number of beta values in annealing schedule   |
+| `betas`             | Temperature schedule from 0 to 1              |
+| `show_diagnostics`  | Whether to show diagnostic plots and output   |
 
 ## Output
 
@@ -37,3 +53,5 @@ Each run produces:
 - An estimate of the partition function Z and standard deviation
 - Relative variance across chains
 - Diagnostic plots for log-Z trajectories and weight dispersion
+- Log-weight variance analysis across beta steps
+- Per-chain relative error analysis (when exact value is known)
