@@ -1,6 +1,6 @@
 """
-Tensor Network Contraction with Annealed Importance Sampling (AIS)
-Authors: Sreevardhan Atyam, Anitej Chanda, Aniket Deshpande, Edgar Solomonik.
+Approximate Tensor Network Contraction with Annealed Importance Sampling (AIS)
+Authors: Sreevardhan Atyam, Anitej Chanda, Aniket Deshpande, Qizhao Huang, Edgar Solomonik.
 University of Illinois Urbana-Champaign
 """
 
@@ -9,6 +9,10 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import seaborn as sns
 from datetime import datetime
+from typing import Optional, Tuple
+
+sns.set_theme(style="whitegrid")
+
 
 class TensorNetwork:
     def __init__(self, graph, tensors):
@@ -28,12 +32,19 @@ class TensorNetwork:
         # map each index label to a column in the config array
         self.col_of = {idx: c for c, idx in enumerate(self.index_dims)}
 
-def evaluate_config(network, configs):
-    result = np.ones(len(configs))
-    for _, (tensor, inds) in network.tensors.items():
-        keys = tuple(configs[i, network.col_of[i]] for i in inds)
-        result *= tensor[keys]
-    return result
+
+def evaluate_config(network: TensorNetwork, configs: np.ndarray) -> np.ndarray:
+    """
+    Given an array of configurations (shape [n_chains, n_sites]),
+    multiply together the tensor entries at those index values.
+    Returns a vector of length n_chains.
+    """
+    out = np.ones(configs.shape[0])
+    for name, (tensor, inds) in network.tensors.items():
+        keys = tuple(configs[:, network.col_of[i]] for i in inds)
+        out *= tensor[keys]
+    return np.clip(out, 1e-30, None)
+
 
 def update_edge(network: TensorNetwork, configs: np.ndarray, idx: str, beta: float = 1.0):
     """
@@ -44,126 +55,128 @@ def update_edge(network: TensorNetwork, configs: np.ndarray, idx: str, beta: flo
     col = network.col_of[idx]
     n_chains = configs.shape[0]
 
+    # build the unnormalized probability table for each chain, each possible label
     probs = np.ones((n_chains, dim))
-
     for _, tensor, inds in network.index_to_tensors[idx]:
-        slc = []
-        for i in inds:
-            if i == idx:
-                slc.append(slice(None))
-            else:
-                slc.append(configs[:, network.col_of[i]])
-        arr_vals = tensor[tuple(slc)]
-        if arr_vals.shape != (n_chains, dim):
-            arr_vals = arr_vals.reshape(n_chains, dim)
-        probs *= arr_vals ** beta
+        # slice out the tensor values along this index for every chain
+        slc = [slice(None) if i == idx else configs[:, network.col_of[i]] for i in inds]
+        vals = tensor[tuple(slc)]
+        if vals.shape != (n_chains, dim):
+            vals = vals.T
+        probs *= np.clip(vals, 1e-30, None) ** beta
 
     # normalize and resample
     probs /= probs.sum(axis=1, keepdims=True)
-    new_vals = [np.random.choice(dim, p=probs[i]) for i in range(n_chains)]
-    configs[:, col] = new_vals
+    for j in range(n_chains):
+        configs[j, col] = np.random.choice(dim, p=probs[j])
 
 
-def estimate_contraction(net, betas, iters=10_000, burns=1_000, n_rounds=5, verbose=True):
-    logZ_trajs = [[] for _ in range(n_rounds)]
-    weights_by_beta = [[] for _ in range(len(betas)-1)]
-    logZ_sums = np.zeros(n_rounds)
-
+def estimate_contraction(
+    net: TensorNetwork,
+    betas: np.ndarray,
+    iters: int = 20000,
+    burns: int = 1900,
+    n_chains: int = 10,
+    verbose: bool = True
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Standard AIS: exactly one weight per chain per beta-step.
+    Returns:
+      Z_ests         – array of length n_chains: individual estimates of Z
+      logZ_trajs     – list of length n_chains of cumulative log Z increments at each step
+      weights_by_beta– ndarray of shape (K, n_chains) of incremental weights w_k,j
+    """
+    K = len(betas) - 1
     index_list = list(net.index_dims)
-    total_steps = len(betas) - 1
-    dim_size = len(index_list)
+    n_sites = len(index_list)
 
-    configs = np.random.randint(0, 3, size=(n_rounds, dim_size))
+    # initialize each chain to a random configuration
+    configs = np.empty((n_chains, n_sites), dtype=int)
+    for j, idx in enumerate(index_list):
+        configs[:, j] = np.random.randint(0, net.index_dims[idx], size=n_chains)
+    np.random.shuffle(configs.T)
 
-    for i in range(1, len(betas)):
-        beta_prev, beta_curr = betas[i-1], betas[i]
-        delta_beta = beta_curr - beta_prev
+    logZ_sums       = np.zeros(n_chains)
+    logZ_trajs      = [ [] for _ in range(n_chains) ]
+    weights_by_beta = np.zeros((K, n_chains))
 
-        if verbose and (i % 10 == 0 or i == total_steps):
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            print(f'[{timestamp}] beta step {i}/{total_steps} ({beta_curr:.4f}) ')
+    for k in range(1, len(betas)):
+        b_prev, b_curr = betas[k-1], betas[k]
+        delta_beta = b_curr - b_prev
 
-        all_weights = [[] for _ in range(n_rounds)]
+        if verbose and (k % 10 == 0 or k == K):
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] β-step {k}/{K} (β={b_curr:.4f})")
 
+        # 1) mix each chain under π_{β_prev} via iters single-site updates
         for t in range(iters):
             idx = np.random.choice(index_list)
-            update_edge(net, configs, idx, beta=beta_prev)
-            if t >= burns:
-                psi_vals = evaluate_config(net, configs)
-                valid = psi_vals > 1e-30
-                weights = np.where(valid, psi_vals ** delta_beta, 0.0)
-                for j in range(n_rounds):
-                    all_weights[j].append(weights[j])
+            update_edge(net, configs, idx, beta=b_prev)
 
-        mean_weights = [np.mean(w) if len(w) > 0 else 0.0 for w in all_weights]
-        log_rhos     = [np.log(mw) if mw > 0 else -np.inf for mw in mean_weights]
+        # 2) one importance weight per chain
+        psi_vals = evaluate_config(net, configs)  # length n_chains
+        w        = psi_vals ** delta_beta         # incremental weights
+        log_w    = np.log(w)
 
-        for j in range(n_rounds):
-            logZ_sums[j] += log_rhos[j]
+        # record into arrays
+        weights_by_beta[k-1, :] = w
+        logZ_sums += log_w
+        for j in range(n_chains):
             logZ_trajs[j].append(logZ_sums[j])
-            weights_by_beta[i-1].append(np.asarray(all_weights[j]))
 
         if verbose:
-            print(f"[beta={beta_curr:.3f}]  mean log rho = {np.mean(log_rhos):+.3e}  | <w> mean = {np.mean(mean_weights):.4e}")
+            print(f"    ⟨w⟩ = {w.mean():.3e},   std(log w) = {np.std(log_w):.3e}")
 
-    log_size = np.sum(np.log(list(net.index_dims.values())))
-    Z_ests = np.exp(logZ_sums + log_size)
-    return Z_ests, logZ_trajs, weights_by_beta
+    # final normalization by the partition function at β=0
+    logZ0 = np.sum(np.log(list(net.index_dims.values())))
+    Z_ests = np.exp(logZ_sums + logZ0)
+    return Z_ests, np.array(logZ_trajs), weights_by_beta
 
 
-# run several independent AIS chains and visualize convergence
-def run_multiple_chains(net        : TensorNetwork,
-                        betas      : np.ndarray,
-                        n_chains   : int  = 5,
-                        iters      : int  = 10000,
-                        burns      : int  = 1000,
-                        n_rounds   : int  = 5,
-                        Z_true     : float|None = None,
-                        n_workers  : int  = None):
-
-    print(f"Running {n_chains} AIS chains vectorized")
-    Z_ests, logZ_trajectories, weights_by_beta = estimate_contraction(
-        net, betas, iters, burns, n_rounds=n_chains, verbose=True
+def run_multiple_chains(
+    tn: TensorNetwork,
+    betas: np.ndarray,
+    iters: int = 20000,
+    burns: int = 1900,
+    n_chains: int = 10,
+    verbose: bool = True,
+    Z_true: Optional[float] = None
+) -> Tuple[float, float]:
+    """
+    Wrapper to run multiple AIS chains and optionally show diagnostics.
+    Returns (mean Z_hat, std Z_hat).
+    """
+    Z_ests, logZ_trajs, w_by_beta = estimate_contraction(
+        tn, betas, iters=iters, burns=burns, n_chains=n_chains, verbose=verbose
     )
 
-    # ---------- 1) cumulative log-Z trajectories ----------------------- #
-    plt.figure(figsize=(12, 3.8))
-    for k, traj in enumerate(logZ_trajectories, 1):
-        plt.plot(betas[1:], traj, label=f"chain {k}", alpha=0.8)
-    plt.xlabel(r"$\beta$")
-    plt.ylabel(r"$\log Z$ (cumulative.)")
-    plt.title("log-Z convergence across chains")
-    plt.legend(); plt.grid(True); plt.tight_layout(); plt.show()
+    if verbose:
+        # you can reuse or simplify run_diagnostics here
+        print(f"\nEstimated Z mean ± std: {Z_ests.mean():.6g} ± {Z_ests.std(ddof=1):.6g}")
+        if Z_true is not None:
+            rel_errs = np.abs(Z_ests - Z_true) / np.abs(Z_true)
+            print(f"Mean relative error: {rel_errs.mean():.6%}")
 
-    # ---------- 2) relative sigma(w) per beta -------------------------------- #
-    plt.figure(figsize=(12, 3.8))
-    for k in range(n_chains):
-        rel_sig = []
-        for weights in weights_by_beta:
-            w = weights[k]
-            rel = np.std(w) / np.mean(w) if np.mean(w) > 0 else 0
-            rel_sig.append(rel)
-        plt.plot(betas[1:], rel_sig, label=f"chain {k+1}", alpha=0.8)
-    plt.xlabel(r"$\beta$")
-    plt.ylabel(r"rel $\sigma(w)$")
-    plt.title("weight dispersion vs beta")
-    plt.legend(); plt.grid(True); plt.tight_layout(); plt.show()
+    return Z_ests.mean(), Z_ests.std(ddof=1)
 
-    # ---------- 3) final-estimate statistics -------------------------- #
-    est_mean, est_std = np.mean(Z_ests), np.std(Z_ests)
-    rel_var = est_std / est_mean if est_mean > 0 else float("nan")
-    print(rf"\nFinal relative variance of $\hat Z$: {rel_var:.4e}")
 
-    if Z_true is not None:
-        rel_errs = [abs(z - Z_true)/abs(Z_true) for z in Z_ests]
-        plt.figure(figsize=(5.5, 4))
-        plt.bar(range(1, n_chains+1), rel_errs)
-        plt.xlabel("chain"); plt.ylabel("rel error")
-        plt.title("final relative error per chain")
-        plt.grid(True); plt.tight_layout(); plt.show()
+def contract_tensor_network(graph, tensors):
+    """
+    Efficient full contraction via np.einsum.
+    `tensors` is a dict: node_name -> (ndarray, [index labels]).
+    """
+    einsum_terms = []
+    einsum_tensors = []
+    index_map = {}
+    chars = list('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')
 
-        print(f"True  Z   : {Z_true:.6f}")
-        print(f"Mean  Ẑ  : {est_mean:.6f}  ± {est_std:.6f}")
-        print(f"Mean rel error: {np.mean(rel_errs):.2%}")
+    for _, (tensor, indices) in tensors.items():
+        subs = []
+        for idx in indices:
+            if idx not in index_map:
+                index_map[idx] = chars.pop(0)
+            subs.append(index_map[idx])
+        einsum_terms.append(''.join(subs))
+        einsum_tensors.append(tensor)
 
-    return est_mean, est_std
+    expr = ','.join(einsum_terms) + '->'
+    return np.einsum(expr, *einsum_tensors, optimize='greedy')
