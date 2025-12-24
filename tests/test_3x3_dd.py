@@ -1,8 +1,8 @@
+# Test AIS on 3x3 grid tensor network with diagonally dominant tensors
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import seaborn as sns
-from src.algorithm import TensorNetwork, run_multiple_chains
+from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
+
 
 def contract_tensor_network(graph, tensors):
     """
@@ -19,7 +19,7 @@ def contract_tensor_network(graph, tensors):
         for idx in indices:
             if idx not in index_map:
                 if not chars:
-                    raise ValueError("ran out of characters for einsum indices")
+                    raise ValueError("[error] ran out of characters for einsum indices")
                 index_map[idx] = chars.pop(0)
             subs.append(index_map[idx])
         einsum_terms.append(''.join(subs))
@@ -27,6 +27,7 @@ def contract_tensor_network(graph, tensors):
 
     expr = ','.join(einsum_terms) + '->'
     return np.einsum(expr, *einsum_tensors, optimize='greedy')
+
 
 def build_3x3_grid_diagonally_dominant(dim=3, noise_level=0.1):
     """
@@ -59,10 +60,10 @@ def build_3x3_grid_diagonally_dominant(dim=3, noise_level=0.1):
             if j > 0: physical_neighbors.append((i, j - 1))
             if j < grid_size - 1: physical_neighbors.append((i, j + 1))
 
-            indices = sorted([edge_index(i,j, ni,nj) for ni,nj in physical_neighbors])
+            indices = sorted([edge_index(i, j, ni, nj) for ni, nj in physical_neighbors])
             G.add_node(name)
             for ni, nj in physical_neighbors:
-                 G.add_edge(name, node_names[(ni,nj)])
+                G.add_edge(name, node_names[(ni, nj)])
             
             shape = (dim,) * len(indices)
             rank = len(shape)
@@ -82,62 +83,79 @@ def build_3x3_grid_diagonally_dominant(dim=3, noise_level=0.1):
 
     return G, tensors
 
+
+def make_logspace_betas(A):
+    """Generate logspace beta schedule for better early-beta resolution."""
+    betas = 1.0 - np.logspace(0, np.log10(1e-6), A)
+    betas[0] = 0.0
+    betas[-1] = 1.0
+    return np.sort(betas)
+
+
 def test_trace_3x3_grid_dd(dim=3,
-                           n_betas=200,
-                           n_chains=10,
-                           iters=20000,
-                           burns=10000,
+                           A=200,
+                           B=400,
+                           C=200,
+                           noise_level=0.1,
                            show_diagnostics=True):
     """
     Test AIS on 3x3 diagonally-dominant grid tensor network.
     
     Args:
         dim: Dimension of each tensor index
-        n_betas: Number of beta values in annealing schedule
-        n_chains: Number of parallel chains
-        iters: Number of iterations per beta step
-        burns: Number of burn-in iterations per beta step
-        show_diagnostics: Whether to show diagnostic plots and detailed output
+        A: Number of beta values in annealing schedule
+        B: Number of parallel chains
+        C: Number of iterations per beta step
+        noise_level: Noise level for diagonal dominance
+        show_diagnostics: Whether to show detailed output
     
     Returns:
         mean_Z: Mean estimate of partition function
         std_Z: Standard deviation of estimate
         rel_error: Relative error compared to exact result
     """
-    if show_diagnostics:
-        print("\n>>> Building 3x3 diagonally-dominant tensor network")
-    
-    G, tensors = build_3x3_grid_diagonally_dominant(dim=dim, noise_level=0.1)
+    burns = max(0, min(C // 10, C - 1))
     
     if show_diagnostics:
-        print(">>> Performing exact contraction (this may take a moment)...")
+        print(f"\n[info] building 3x3 diagonally-dominant tensor network (noise_level={noise_level})")
+    
+    G, tensors = build_3x3_grid_diagonally_dominant(dim=dim, noise_level=noise_level)
+    
+    if show_diagnostics:
+        print("[info] performing exact contraction...")
     TRUE_Z = contract_tensor_network(G, tensors)
     if show_diagnostics:
-        print(f"True Z (exact contraction): {TRUE_Z:.12f}")
+        print(f"[info] exact Z = {TRUE_Z:.12e}")
 
     tn = TensorNetwork(G, tensors)
-    betas = np.linspace(0, 1, n_betas)**2  # Quadratic beta schedule
+    betas = make_logspace_betas(A)
 
     if show_diagnostics:
-        print("\n>>> Running AIS estimation...")
+        print(f"\n[info] running AIS (A={A}, B={B}, C={C}, burns={burns})")
+        print(f"[info] using logspace beta schedule")
+    
     mean_Z, std_Z = run_multiple_chains(
         tn, betas,
-        n_chains=n_chains,
-        iters=iters,
+        n_chains=B,
+        iters=C,
         burns=burns,
-        Z_true=TRUE_Z if show_diagnostics else None
+        Z_true=TRUE_Z if show_diagnostics else None,
+        verbose=show_diagnostics
     )
 
     rel_error = abs(mean_Z - TRUE_Z) / abs(TRUE_Z) if TRUE_Z != 0 else float('inf')
     
     if show_diagnostics:
-        print("\n================== Final Summary ==================")
-        print(f"True        Z  : {TRUE_Z:.12f}")
-        print(f"Estimated   Z  : {mean_Z:.12f} ± {std_Z:.12f}")
-        print(f"Relative Error : {rel_error:.6e}")
-        print("====================================================")
+        print("\n" + "=" * 60)
+        print("[summary] 3x3 Diagonally Dominant Grid Results")
+        print("=" * 60)
+        print(f"[result] exact Z      : {TRUE_Z:.12e}")
+        print(f"[result] estimated Z  : {mean_Z:.12e} ± {std_Z:.12e}")
+        print(f"[result] rel error    : {rel_error:.6e}")
+        print("=" * 60)
 
     return mean_Z, std_Z, rel_error
+
 
 if __name__ == "__main__":
     test_trace_3x3_grid_dd()

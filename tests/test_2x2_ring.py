@@ -1,27 +1,51 @@
-# test on 2x2 ring tensor network: Tr(ABCD)
+# Test AIS on 2x2 ring tensor network: Tr(ABCD)
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import seaborn as sns
 from src.algorithm import TensorNetwork, run_multiple_chains
 
-def test_trace_ABCD(dim=3,
-                    betas=np.linspace(0, 1, 200),
-                    n_chains=5,
-                    iters=20000,
-                    burns=1900,
-                    show_diagnostics=True):
-    if show_diagnostics:
-        print("\n>>> Building 2x2 ring tensor network (Tr(ABCD))")
 
-    # create 2x2 ring tensor network
+def make_logspace_betas(A):
+    """Generate logspace beta schedule for better early-beta resolution."""
+    betas = 1.0 - np.logspace(0, np.log10(1e-6), A)
+    betas[0] = 0.0
+    betas[-1] = 1.0
+    return np.sort(betas)
+
+
+def test_trace_ABCD(dim=3,
+                    A=200,
+                    B=100,
+                    C=200,
+                    show_diagnostics=True):
+    """
+    Test AIS on 2x2 ring tensor network (Tr(ABCD)).
+    
+    Args:
+        dim: Dimension of each tensor index
+        A: Number of beta values in annealing schedule
+        B: Number of parallel chains
+        C: Number of iterations per beta step
+        show_diagnostics: Whether to show detailed output
+    
+    Returns:
+        mean_Z: Mean estimate of partition function
+        std_Z: Standard deviation of estimate
+        rel_error: Relative error compared to exact result
+    """
+    burns = max(0, min(C // 10, C - 1))
+    
+    if show_diagnostics:
+        print(f"\n[info] building 2x2 ring tensor network (Tr(ABCD))")
+
+    # Create 2x2 ring tensor network
     G = nx.Graph()
     G.add_edges_from([
         ('A', 'B'), ('B', 'C'),
         ('C', 'D'), ('D', 'A'),
     ])
 
-    # init tensors with normal distribution for better numerical stability
+    # Initialize tensors with normal distribution
+    np.random.seed(42)
     tensors = {}
     index_order = {
         'A': ['i', 'j'],
@@ -33,34 +57,42 @@ def test_trace_ABCD(dim=3,
         data = np.random.normal(loc=1.0, scale=0.1, size=(dim, dim)) + 1e-6
         tensors[node] = (data, inds)
 
-    # exact contraction: trace of product
-    A, B, C, D = [tensors[k][0] for k in ['A', 'B', 'C', 'D']]
-    TRUE_Z = np.einsum('ij,jk,kl,li->', A, B, C, D)
+    # Exact contraction: trace of product
+    A_t, B_t, C_t, D_t = [tensors[k][0] for k in ['A', 'B', 'C', 'D']]
+    TRUE_Z = np.einsum('ij,jk,kl,li->', A_t, B_t, C_t, D_t)
+    
     if show_diagnostics:
-        print(f"True Z (Tr(ABCD)): {TRUE_Z:.6f}")
+        print(f"[info] exact Z = {TRUE_Z:.12e}")
 
     tn = TensorNetwork(G, tensors)
+    betas = make_logspace_betas(A)
 
     if show_diagnostics:
-        print("\n>>> Running MCMC chains")
+        print(f"\n[info] running AIS (A={A}, B={B}, C={C}, burns={burns})")
+        print(f"[info] using logspace beta schedule")
+    
     mean_Z, std_Z = run_multiple_chains(
         tn, betas,
-        n_chains=n_chains,
-        iters=iters,
+        n_chains=B,
+        iters=C,
         burns=burns,
         Z_true=TRUE_Z if show_diagnostics else None,
-        show_diagnostics=show_diagnostics
+        verbose=show_diagnostics
     )
 
-    rel_error = abs(mean_Z - TRUE_Z) / abs(TRUE_Z)
+    rel_error = abs(mean_Z - TRUE_Z) / abs(TRUE_Z) if TRUE_Z != 0 else float('inf')
+    
     if show_diagnostics:
-        print("\n================== Final Summary ==================")
-        print(f"True       Z : {TRUE_Z:.6f}")
-        print(f"Estimated  Z : {mean_Z:.6f} ± {std_Z:.6f}")
-        print(f"Relative Error: {rel_error:.8%}")
-        print("====================================================")
+        print("\n" + "=" * 60)
+        print("[summary] 2x2 Ring (Tr(ABCD)) Results")
+        print("=" * 60)
+        print(f"[result] exact Z      : {TRUE_Z:.12e}")
+        print(f"[result] estimated Z  : {mean_Z:.12e} ± {std_Z:.12e}")
+        print(f"[result] rel error    : {rel_error:.6e}")
+        print("=" * 60)
 
     return mean_Z, std_Z, rel_error
+
 
 if __name__ == "__main__":
     test_trace_ABCD()
