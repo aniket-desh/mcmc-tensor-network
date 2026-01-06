@@ -1,4 +1,12 @@
 # Test AIS on 3x3 grid tensor network with diagonally dominant tensors
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
@@ -29,19 +37,20 @@ def contract_tensor_network(graph, tensors):
     return np.einsum(expr, *einsum_tensors, optimize='greedy')
 
 
-def build_3x3_grid_diagonally_dominant(dim=3, noise_level=0.1):
+def build_3x3_grid_diagonally_dominant(dim=3, noise_level=0.1, seed=42):
     """
     Build a 3x3 grid tensor network with diagonally dominant tensors.
     
     Args:
         dim: Dimension of each tensor index
         noise_level: Amount of noise to add to diagonal dominance (0 = pure diagonal, 1 = uniform)
+        seed: Random seed for reproducibility
     
     Returns:
         G: NetworkX graph representing the tensor network
         tensors: Dictionary mapping node names to (tensor, indices) tuples
     """
-    np.random.seed(42)
+    np.random.seed(seed)
     G = nx.Graph()
     tensors = {}
     grid_size = 3
@@ -97,6 +106,7 @@ def test_trace_3x3_grid_dd(dim=3,
                            B=400,
                            C=200,
                            noise_level=0.1,
+                           seed=42,
                            show_diagnostics=True):
     """
     Test AIS on 3x3 diagonally-dominant grid tensor network.
@@ -107,6 +117,7 @@ def test_trace_3x3_grid_dd(dim=3,
         B: Number of parallel chains
         C: Number of iterations per beta step
         noise_level: Noise level for diagonal dominance
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -119,7 +130,7 @@ def test_trace_3x3_grid_dd(dim=3,
     if show_diagnostics:
         print(f"\n[info] building 3x3 diagonally-dominant tensor network (noise_level={noise_level})")
     
-    G, tensors = build_3x3_grid_diagonally_dominant(dim=dim, noise_level=noise_level)
+    G, tensors = build_3x3_grid_diagonally_dominant(dim=dim, noise_level=noise_level, seed=seed)
     
     if show_diagnostics:
         print("[info] performing exact contraction...")
@@ -158,4 +169,23 @@ def test_trace_3x3_grid_dd(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_3x3_grid_dd()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 3x3 diagonally-dominant grid tensor network")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=400, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--noise_level", type=float, default=0.1, help="Noise level for diagonal dominance")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_3x3_grid_dd(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        noise_level=args.noise_level,
+        seed=args.seed,
+    )

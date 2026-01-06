@@ -1,4 +1,12 @@
 # Test AIS on 3x3 grid tensor network with exponentially-decaying diagonal
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
@@ -106,6 +114,8 @@ def test_trace_3x3_grid_exp_diag(dim=3,
                                   B=400,
                                   C=200,
                                   alpha=0.6,
+                                  eps=1e-6,
+                                  seed=42,
                                   show_diagnostics=True):
     """
     Test AIS on 3x3 exponential-diagonal grid tensor network.
@@ -116,6 +126,8 @@ def test_trace_3x3_grid_exp_diag(dim=3,
         B: Number of parallel chains
         C: Number of iterations per beta step
         alpha: Exponential decay rate for diagonal entries
+        eps: Small positive floor for off-diagonal entries
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -128,7 +140,7 @@ def test_trace_3x3_grid_exp_diag(dim=3,
     if show_diagnostics:
         print(f"\n[info] building 3x3 exp-diag tensor network (alpha={alpha})")
     
-    G, tensors = build_3x3_grid_exp_diag(dim=dim, alpha=alpha)
+    G, tensors = build_3x3_grid_exp_diag(dim=dim, alpha=alpha, eps=eps, seed=seed)
     
     if show_diagnostics:
         print("[info] performing exact contraction...")
@@ -137,7 +149,8 @@ def test_trace_3x3_grid_exp_diag(dim=3,
         print(f"[info] exact Z = {TRUE_Z:.12e}")
 
     tn = TensorNetwork(G, tensors)
-    betas = make_logspace_betas(A)
+    # betas = make_logspace_betas(A)
+    betas = np.linspace(0, 1, A)
 
     if show_diagnostics:
         print(f"\n[info] running AIS (A={A}, B={B}, C={C}, burns={burns})")
@@ -167,4 +180,25 @@ def test_trace_3x3_grid_exp_diag(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_3x3_grid_exp_diag()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 3x3 exp-diag grid tensor network")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=400, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--alpha", type=float, default=0.6, help="Decay rate for diagonal entries")
+    parser.add_argument("--eps", type=float, default=1e-6, help="Floor for off-diagonal entries")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_3x3_grid_exp_diag(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        alpha=args.alpha,
+        eps=args.eps,
+        seed=args.seed,
+    )

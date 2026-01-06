@@ -1,4 +1,12 @@
 # Test AIS on 3x3 grid tensor network with uniform-around-1 entries
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
@@ -93,6 +101,7 @@ def test_trace_3x3_grid_uniform1(dim=3,
                                   B=400,
                                   C=200,
                                   jitter=0.1,
+                                  seed=42,
                                   show_diagnostics=True):
     """
     Test AIS on 3x3 uniform-around-1 grid tensor network.
@@ -103,6 +112,7 @@ def test_trace_3x3_grid_uniform1(dim=3,
         B: Number of parallel chains
         C: Number of iterations per beta step
         jitter: Half-width of uniform distribution around 1
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -115,7 +125,7 @@ def test_trace_3x3_grid_uniform1(dim=3,
     if show_diagnostics:
         print(f"\n[info] building 3x3 uniform1 tensor network (jitter={jitter})")
     
-    G, tensors = build_3x3_grid_uniform1(dim=dim, jitter=jitter)
+    G, tensors = build_3x3_grid_uniform1(dim=dim, jitter=jitter, seed=seed)
     
     if show_diagnostics:
         print("[info] performing exact contraction...")
@@ -154,5 +164,24 @@ def test_trace_3x3_grid_uniform1(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_3x3_grid_uniform1()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 3x3 uniform-around-1 grid tensor network")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=400, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--jitter", type=float, default=0.1, help="Uniform jitter half-width")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_3x3_grid_uniform1(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        jitter=args.jitter,
+        seed=args.seed,
+    )
 

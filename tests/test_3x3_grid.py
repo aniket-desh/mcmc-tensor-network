@@ -1,4 +1,12 @@
 # Test AIS on 3x3 grid tensor network with Gaussian entries
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
@@ -92,6 +100,7 @@ def test_trace_3x3_grid(dim=3,
                         A=200,
                         B=400,
                         C=200,
+                        seed=42,
                         show_diagnostics=True):
     """
     Test AIS on 3x3 Gaussian grid tensor network.
@@ -101,6 +110,7 @@ def test_trace_3x3_grid(dim=3,
         A: Number of beta values in annealing schedule
         B: Number of parallel chains
         C: Number of iterations per beta step
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -113,7 +123,7 @@ def test_trace_3x3_grid(dim=3,
     if show_diagnostics:
         print(f"\n[info] building 3x3 Gaussian tensor network")
     
-    G, tensors = build_3x3_grid_gaussian(dim=dim)
+    G, tensors = build_3x3_grid_gaussian(dim=dim, seed=seed)
     
     if show_diagnostics:
         print("[info] performing exact contraction...")
@@ -152,4 +162,21 @@ def test_trace_3x3_grid(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_3x3_grid()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 3x3 Gaussian grid tensor network")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=400, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_3x3_grid(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        seed=args.seed,
+    )

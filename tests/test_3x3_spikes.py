@@ -1,4 +1,12 @@
 # Test AIS on 3x3 grid tensor network with diagonal spikes
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains, estimate_contraction
@@ -101,6 +109,8 @@ def test_trace_3x3_grid_spikes(dim=3,
                                 B=400,
                                 C=200,
                                 spike_factor=10.0,
+                                jitter=0.1,
+                                seed=42,
                                 show_diagnostics=True):
     """
     Test AIS on 3x3 diagonal-spikes grid tensor network.
@@ -111,6 +121,8 @@ def test_trace_3x3_grid_spikes(dim=3,
         B: Number of parallel chains
         C: Number of iterations per beta step
         spike_factor: Multiplicative spike factor for diagonal entries
+        jitter: Half-width of uniform base distribution around 1
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -123,7 +135,7 @@ def test_trace_3x3_grid_spikes(dim=3,
     if show_diagnostics:
         print(f"\n[info] building 3x3 spikes tensor network (spike_factor={spike_factor})")
     
-    G, tensors = build_3x3_grid_spikes(dim=dim, spike_factor=spike_factor)
+    G, tensors = build_3x3_grid_spikes(dim=dim, spike_factor=spike_factor, jitter=jitter, seed=seed)
     
     if show_diagnostics:
         print("[info] performing exact contraction...")
@@ -162,5 +174,26 @@ def test_trace_3x3_grid_spikes(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_3x3_grid_spikes()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 3x3 diagonal-spikes grid tensor network")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=400, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--spike_factor", type=float, default=10.0, help="Spike factor for diagonal")
+    parser.add_argument("--jitter", type=float, default=0.1, help="Uniform jitter half-width")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_3x3_grid_spikes(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        spike_factor=args.spike_factor,
+        jitter=args.jitter,
+        seed=args.seed,
+    )
 

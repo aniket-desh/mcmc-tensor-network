@@ -30,31 +30,57 @@ class TensorNetwork:
         self.col_of = {idx: c for c, idx in enumerate(self.index_dims)}
 
 
-def evaluate_config(network: TensorNetwork, configs: np.ndarray) -> np.ndarray:
-    out = np.ones(len(configs))
-    for name, (tensor, inds) in network.tensors.items():
+def evaluate_logpsi(network: TensorNetwork, configs: np.ndarray) -> np.ndarray:
+    """Return log ψ(c) for each chain c, without clipping (numerically stable)."""
+    log_out = np.zeros(len(configs), dtype=np.float64)
+    for _, (tensor, inds) in network.tensors.items():
         keys = tuple(configs[:, network.col_of[i]] for i in inds)
-        out *= tensor[keys]
-    return np.clip(out, 1e-30, None)
+        vals = tensor[keys].astype(np.float64, copy=False)  # shape (n_chains,)
+        # if any vals can be 0, treat as -inf (zero weight)
+        log_out += np.where(vals > 0.0, np.log(vals), -np.inf)
+    return log_out
+
+
+def evaluate_config(network: TensorNetwork, configs: np.ndarray) -> np.ndarray:
+    """(Optional wrapper) ψ(c) in value-space. May underflow for large nets."""
+    return np.exp(evaluate_logpsi(network, configs))
 
 
 def update_edge(network: TensorNetwork, configs: np.ndarray, idx: str, beta: float = 1.0):
+    """Gibbs update for index `idx` using log-space softmax for numerical stability."""
     dim = network.index_dims[idx]
     col = network.col_of[idx]
     n_chains = configs.shape[0]
-    probs = np.ones((n_chains, dim))
-    # multiply in each tensor factor touching idx
+
+    # accumulate log-probs: log p(a) ∝ beta * sum_f log f(a, neighbors)
+    logp = np.zeros((n_chains, dim), dtype=np.float64)
+
     for _, tensor, inds in network.index_to_tensors[idx]:
         slc = [slice(None) if i == idx else configs[:, network.col_of[i]] for i in inds]
         vals = tensor[tuple(slc)]
         if vals.shape != (n_chains, dim):
             vals = vals.T
-        probs *= np.clip(vals, 1e-30, None) ** beta
-    probs /= probs.sum(axis=1, keepdims=True)
-    # resample that index in all chains
-    configs[:, col] = [
-        np.random.choice(dim, p=probs[i]) for i in range(n_chains)
-    ]
+        vals = vals.astype(np.float64, copy=False)
+
+        logp += beta * np.where(vals > 0.0, np.log(vals), -np.inf)
+
+    # stable softmax row-wise
+    row_max = np.max(logp, axis=1, keepdims=True)
+    probs = np.empty_like(logp)
+
+    finite = np.isfinite(row_max).reshape(-1)
+    if np.any(finite):
+        lp = logp[finite] - row_max[finite]
+        p = np.exp(lp)
+        p_sum = p.sum(axis=1, keepdims=True)
+        probs[finite] = p / p_sum
+
+    # if a row is all -inf (shouldn't happen with your eps floors), fall back to uniform
+    if np.any(~finite):
+        probs[~finite] = 1.0 / dim
+
+    # resample
+    configs[:, col] = [np.random.choice(dim, p=probs[i]) for i in range(n_chains)]
 
 
 def estimate_contraction(
@@ -96,13 +122,16 @@ def estimate_contraction(
             idx = np.random.choice(index_list)
             update_edge(net, configs, idx, beta=b_prev)
 
-        # 2) one weight per chain
-        psi_vals = evaluate_config(net, configs)                 # shape (n_chains,)
-        w      = np.clip(psi_vals, 1e-30, None) ** db            # incremental weights
-        log_w  = np.log(w)
+        # 2) compute weights in log space (stable, no clipping bias)
+        logpsi = evaluate_logpsi(net, configs)      # shape (n_chains,)
+        log_w  = db * logpsi                        # incremental log-weights (stable)
+
+        # compute w stably for storing/printing (avoids overflow in intermediate)
+        m = np.max(log_w)
+        w = np.exp(log_w - m) * np.exp(m)           # equals exp(log_w)
 
         # record
-        weights_by_beta[k-1,:] = w
+        weights_by_beta[k-1, :] = w
         logZ_sums += log_w
         for j in range(n_chains):
             logZ_trajs[j].append(logZ_sums[j])

@@ -1,4 +1,12 @@
 # Test AIS on 2x2 ring tensor network: Tr(ABCD)
+
+from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 import networkx as nx
 from src.algorithm import TensorNetwork, run_multiple_chains
@@ -16,6 +24,7 @@ def test_trace_ABCD(dim=3,
                     A=200,
                     B=100,
                     C=200,
+                    seed=42,
                     show_diagnostics=True):
     """
     Test AIS on 2x2 ring tensor network (Tr(ABCD)).
@@ -25,6 +34,7 @@ def test_trace_ABCD(dim=3,
         A: Number of beta values in annealing schedule
         B: Number of parallel chains
         C: Number of iterations per beta step
+        seed: Random seed for reproducibility
         show_diagnostics: Whether to show detailed output
     
     Returns:
@@ -45,7 +55,7 @@ def test_trace_ABCD(dim=3,
     ])
 
     # Initialize tensors with normal distribution
-    np.random.seed(42)
+    np.random.seed(seed)
     tensors = {}
     index_order = {
         'A': ['i', 'j'],
@@ -95,4 +105,21 @@ def test_trace_ABCD(dim=3,
 
 
 if __name__ == "__main__":
-    test_trace_ABCD()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test AIS on 2x2 ring tensor network (Tr(ABCD))")
+    parser.add_argument("--dim", type=int, default=3, help="Bond dimension")
+    parser.add_argument("-A", type=int, default=200, help="Number of beta values")
+    parser.add_argument("-B", type=int, default=100, help="Number of parallel chains")
+    parser.add_argument("-C", type=int, default=200, help="Iterations per beta step")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    args = parser.parse_args()
+
+    test_trace_ABCD(
+        dim=args.dim,
+        A=args.A,
+        B=args.B,
+        C=args.C,
+        seed=args.seed,
+    )
