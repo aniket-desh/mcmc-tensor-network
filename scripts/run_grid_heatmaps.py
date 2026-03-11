@@ -79,18 +79,21 @@ def gstd_series(s):
 # ============================================================================
 
 def create_test_tensor_network(network_type="2x2_ring", dim=3, seed=42,
-                               eps=1e-6, alpha=0.6, spike_factor=10.0, jitter=0.1):
+                               eps=1e-6, alpha=0.6, spike_factor=10.0, jitter=0.1,
+                               sparse_density=0.3):
     """
     network_type options (topology + optional weight model):
       - "2x2_ring", "3x3_grid"                      (old behavior: N(1,0.1))
       - "2x2_ring_uniform1",   "3x3_grid_uniform1"  (uniform around 1, nonnegative)
       - "2x2_ring_diagexp",    "3x3_grid_diagexp"   (exponentially-decaying diagonal)
       - "2x2_ring_spikes",     "3x3_grid_spikes"    (uniform + diagonal spikes)
+      - "2x2_ring_sparse",     "3x3_grid_sparse"    (sparse tensor, density controlled by k)
 
     dim: index range size for each leg
     alpha: decay rate for diagexp
     spike_factor: multiplicative spike on diagonal entries for spikes
     jitter: half-width of uniform around 1, i.e., U[1-jitter, 1+jitter]
+    sparse_density: fraction of non-zero entries for sparse model (0 < k <= 1)
     """
     np.random.seed(seed)
 
@@ -125,6 +128,17 @@ def create_test_tensor_network(network_type="2x2_ring", dim=3, seed=42,
             idx = np.indices(shape)
             mask = np.all(idx == idx[0], axis=0)
             T[mask] *= spike_factor
+            return T
+
+        if model == "sparse":
+            # Create sparse tensor with density controlled by sparse_density (k)
+            T = np.full(shape, eps, dtype=float)
+            # Generate random mask for non-zero entries
+            mask = rng.random(size=shape) < sparse_density
+            # Fill non-zero entries with uniform values around 1
+            n_nonzero = np.sum(mask)
+            T[mask] = rng.uniform(1.0 - jitter, 1.0 + jitter, size=n_nonzero)
+            T = np.maximum(T, eps)
             return T
 
         raise ValueError(f"Unknown weight model in network_type: {model}")
