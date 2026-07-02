@@ -75,7 +75,7 @@ def update_edge(network: TensorNetwork, configs: np.ndarray, idx: str, beta: flo
         p_sum = p.sum(axis=1, keepdims=True)
         probs[finite] = p / p_sum
 
-    # if a row is all -inf (shouldn't happen with your eps floors), fall back to uniform
+    # if a row is all -inf (shouldn't happen with eps floors), fall back to uniform
     if np.any(~finite):
         probs[~finite] = 1.0 / dim
 
